@@ -7,6 +7,8 @@ import browseRoutes from './routes/browse';
 import { cleanupStreams } from './stream';
 import { scanLibrary, startLibraryWatcher } from './scanner';
 
+import historyRoutes from './routes/history';
+
 const fastify = Fastify({ logger: true });
 
 fastify.register(cors, { origin: '*' });
@@ -15,6 +17,7 @@ fastify.register(libraryRoutes, { prefix: '/api/library' });
 fastify.register(streamRoutes, { prefix: '/api/stream' });
 fastify.register(configRoutes, { prefix: '/api/config' });
 fastify.register(browseRoutes, { prefix: '/api/browse' });
+fastify.register(historyRoutes, { prefix: '/api/history' });
 
 const start = async () => {
   try {
