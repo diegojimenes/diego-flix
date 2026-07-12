@@ -16,7 +16,6 @@ export function stopTranscode(id: string) {
   if (existing) {
     console.log(`Stopping transcode for ${id} explicitly.`);
     existing.kill('SIGKILL');
-    activeTranscodes.delete(id);
   }
 }
 
@@ -135,7 +134,6 @@ export async function startTranscode(video: VideoMetadata, startSeconds?: number
       console.log(`Stream ${video.id} timed out due to inactivity. Killing FFmpeg.`);
       ffmpeg.kill('SIGKILL');
       clearInterval(timeoutInterval);
-      activeTranscodes.delete(video.id);
     }
   }, 10000);
 
@@ -145,8 +143,13 @@ export async function startTranscode(video: VideoMetadata, startSeconds?: number
 
   ffmpeg.on('close', (code) => {
     console.log(`FFmpeg for ${video.id} exited with code ${code}`);
-    activeTranscodes.delete(video.id);
     clearInterval(timeoutInterval);
+    if (activeTranscodes.get(video.id) === ffmpeg) {
+      activeTranscodes.delete(video.id);
+      fs.rm(streamDir, { recursive: true, force: true }).catch((e) => {
+        console.error(`Failed to clean up stream dir for ${video.id}:`, e);
+      });
+    }
   });
 
   return streamDir;
