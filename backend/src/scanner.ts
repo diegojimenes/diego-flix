@@ -11,18 +11,16 @@ ffmpeg.setFfprobePath(ffprobeStatic.path);
 
 const ALLOWED_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v']);
 
-async function fetchTmdbMetadata(filename: string, apiKey: string, type: 'movie' | 'tv' = 'movie'): Promise<Partial<VideoMetadata>> {
+async function fetchTmdbMetadata(filename: string, apiKey: string, type: 'movie' | 'tv' = 'movie', season?: number, episode?: number): Promise<Partial<VideoMetadata> & { seriesTmdbName?: string }> {
   try {
     let cleanName = filename.replace(/\.(mp4|mkv|avi|mov|webm|m4v)$/i, '');
     let year = '';
 
-    // Extract year and name: "Movie.Name.2023.1080p" -> "Movie Name", "2023"
     const yearMatch = cleanName.match(/(.+?)[\.\s_-]*(?:\(|\[)?((?:19|20)\d{2})(?:\)|\])?/i);
     if (yearMatch) {
       cleanName = yearMatch[1];
       year = yearMatch[2];
     } else {
-      // If no year, strip common release tags
       const tagMatch = cleanName.match(/(.+?)[\.\s_-]*(?:1080p|720p|2160p|4k|x264|h264|x265|hevc|bluray|web-dl|HDRip|HDTV)/i);
       if (tagMatch) {
         cleanName = tagMatch[1];
@@ -42,15 +40,35 @@ async function fetchTmdbMetadata(filename: string, apiKey: string, type: 'movie'
     const data = await response.json();
 
     if (data.results && data.results.length > 0) {
-      const movie = data.results[0];
-      return {
-        name: type === 'movie' ? movie.title || cleanName : movie.name || cleanName,
-        plot: movie.overview,
-        year: (type === 'movie' ? movie.release_date : movie.first_air_date) ? (type === 'movie' ? movie.release_date : movie.first_air_date).substring(0, 4) : year,
-        posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : undefined,
-        backdropUrl: movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : undefined,
-        tmdbId: movie.id,
+      const result = data.results[0];
+      let meta: Partial<VideoMetadata> & { seriesTmdbName?: string } = {
+        name: type === 'movie' ? result.title || cleanName : result.name || cleanName,
+        plot: result.overview,
+        year: (type === 'movie' ? result.release_date : result.first_air_date) ? (type === 'movie' ? result.release_date : result.first_air_date).substring(0, 4) : year,
+        posterUrl: result.poster_path ? `https://image.tmdb.org/t/p/w500${result.poster_path}` : undefined,
+        backdropUrl: result.backdrop_path ? `https://image.tmdb.org/t/p/w1280${result.backdrop_path}` : undefined,
+        tmdbId: result.id,
       };
+
+      if (type === 'tv') {
+        meta.seriesTmdbName = result.name || cleanName;
+        // Fetch specific episode metadata if season and episode are provided
+        if (season !== undefined && episode !== undefined) {
+          const epUrl = `https://api.themoviedb.org/3/tv/${result.id}/season/${season}/episode/${episode}?api_key=${apiKey}&language=pt-BR`;
+          const epResponse = await fetch(epUrl);
+          if (epResponse.ok) {
+            const epData = await epResponse.json();
+            meta.name = epData.name || meta.name; // Use episode name as the primary name
+            meta.plot = epData.overview || meta.plot; // Use episode plot, fallback to series plot
+            meta.episodeName = epData.name;
+            if (epData.still_path) {
+              meta.backdropUrl = `https://image.tmdb.org/t/p/w1280${epData.still_path}`;
+            }
+          }
+        }
+      }
+
+      return meta;
     }
   } catch (err) {
     console.error(`Failed to fetch TMDB data for ${filename}:`, err);
@@ -139,31 +157,60 @@ export async function scanLibrary(): Promise<void> {
               const relDir = path.dirname(relPath);
               let seriesName: string | undefined;
               let episodeName: string | undefined;
+              let seasonNumber: number | undefined;
+              let episodeNumber: number | undefined;
               
               if (relDir !== '.' && relDir !== '') {
-                seriesName = relDir.split(path.sep)[0];
+                seriesName = relDir.split(path.sep)[0]; // Folder name is used as the base series name to search
                 episodeName = path.basename(file.name, ext);
+                
+                // Extract season number from the folder name (e.g. "Temporada 5", "Season 02")
+                const folderSeasonMatch = seriesName.match(/(?:temporada|season)\s*(\d+)/i);
+                if (folderSeasonMatch) {
+                  seasonNumber = parseInt(folderSeasonMatch[1], 10);
+                  // Clean up the series name for TMDB search
+                  seriesName = seriesName.replace(/(?:temporada|season)\s*\d+/i, '').replace(/[\.\-\_]+$/, '').trim();
+                }
+                
+                // Parse season and episode from filename, e.g. "S01E05" or "1x05"
+                const seMatch = episodeName.match(/[sS](\d+)[eE](\d+)/) || episodeName.match(/(\d+)x(\d+)/);
+                if (seMatch) {
+                  seasonNumber = parseInt(seMatch[1], 10);
+                  episodeNumber = parseInt(seMatch[2], 10);
+                } else if (seasonNumber !== undefined) {
+                  // If season was found in the folder, but filename is just "01", "02.mkv", "Episodio 1"
+                  const epMatch = episodeName.match(/^(?:ep|episodio|episode)?\s*[-_]*\s*(\d+)/i);
+                  if (epMatch) {
+                    episodeNumber = parseInt(epMatch[1], 10);
+                  }
+                }
               }
 
-              let tmdbData = {};
+              let tmdbData: any = {};
               if (config.tmdbApiKey) {
                 if (seriesName) {
-                  tmdbData = await fetchTmdbMetadata(seriesName, config.tmdbApiKey, 'tv');
+                  tmdbData = await fetchTmdbMetadata(seriesName, config.tmdbApiKey, 'tv', seasonNumber, episodeNumber);
                 } else {
                   tmdbData = await fetchTmdbMetadata(file.name, config.tmdbApiKey, 'movie');
                 }
               }
 
+              // Use the TMDB official series name if found, otherwise fallback to the folder name
+              const finalSeriesName = tmdbData.seriesTmdbName || seriesName;
+
               videos.push({
                 id,
-                name: tmdbData.name || (seriesName ? episodeName : path.basename(file.name, ext)),
+                name: tmdbData.name || (finalSeriesName ? episodeName : path.basename(file.name, ext)),
                 path: fullPath,
                 size: stat.size,
                 ext,
-                seriesName,
-                episodeName,
+                seriesName: finalSeriesName,
+                episodeName: tmdbData.episodeName || episodeName,
+                seasonNumber,
+                episodeNumber,
                 ...metadata,
                 ...tmdbData,
+                seriesTmdbName: undefined // don't store the temp field in the db directly
               } as VideoMetadata);
             }
           }

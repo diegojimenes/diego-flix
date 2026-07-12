@@ -29,6 +29,8 @@ export interface VideoMetadata {
   // Series Metadata
   seriesName?: string;
   episodeName?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
 }
 
 export async function getLibrary(): Promise<VideoMetadata[]> {
