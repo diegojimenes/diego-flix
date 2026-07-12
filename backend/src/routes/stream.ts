@@ -64,6 +64,12 @@ export default async function streamRoutes(fastify: FastifyInstance) {
     return m3u8;
   });
 
+  fastify.get('/:id/ping', async (request: any, reply) => {
+    const { id } = request.params;
+    pingStream(id);
+    return reply.send({ success: true });
+  });
+
   fastify.delete('/:id', async (request: any, reply) => {
     const { id } = request.params;
     const { stopTranscode } = require('../stream');

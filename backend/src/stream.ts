@@ -130,12 +130,12 @@ export async function startTranscode(video: VideoMetadata, startSeconds?: number
 
   const timeoutInterval = setInterval(() => {
     const last = lastActivity.get(video.id) || 0;
-    if (Date.now() - last > 30000) {
+    if (Date.now() - last > 3600000) { // 1 hour timeout
       console.log(`Stream ${video.id} timed out due to inactivity. Killing FFmpeg.`);
       ffmpeg.kill('SIGKILL');
       clearInterval(timeoutInterval);
     }
-  }, 10000);
+  }, 30000); // check every 30s
 
   ffmpeg.stderr.on('data', (data) => {
     console.error(`ffmpeg stderr: ${data}`); // Optional: keep it silenced to avoid flooding
@@ -146,9 +146,11 @@ export async function startTranscode(video: VideoMetadata, startSeconds?: number
     clearInterval(timeoutInterval);
     if (activeTranscodes.get(video.id) === ffmpeg) {
       activeTranscodes.delete(video.id);
-      fs.rm(streamDir, { recursive: true, force: true }).catch((e) => {
-        console.error(`Failed to clean up stream dir for ${video.id}:`, e);
-      });
+      if (code !== 0) {
+        fs.rm(streamDir, { recursive: true, force: true }).catch((e) => {
+          console.error(`Failed to clean up stream dir for ${video.id}:`, e);
+        });
+      }
     }
   });
 
